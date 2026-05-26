@@ -33,7 +33,7 @@ def docx_to_delta(doc: Document) -> dict:
     """Convert python-docx Document to Quill Delta ops."""
     ops = []
     for para in doc.paragraphs:
-        style = para.style.name
+        style = para.style.name if para.style else "Normal"
 
         if not para.runs and not para.text:
             ops.append({"insert": "\n"})
@@ -43,13 +43,13 @@ def docx_to_delta(doc: Document) -> dict:
             if not run.text:
                 continue
             attrs: dict = {}
-            if run.bold:
+            if run.bold is True:
                 attrs["bold"] = True
-            if run.italic:
+            if run.italic is True:
                 attrs["italic"] = True
-            if run.underline:
+            if run.underline is True:
                 attrs["underline"] = True
-            if run.font.strike:
+            if run.font.strike is True:
                 attrs["strike"] = True
             op: dict = {"insert": run.text}
             if attrs:
