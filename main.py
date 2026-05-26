@@ -11,18 +11,20 @@ Formatting preserved: bold, italic, underline, strikethrough,
 """
 
 import json
+import os
 import threading
 import webbrowser
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string, request, send_file
 from docx import Document
 from docx.shared import Pt, RGBColor
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
 app = Flask(__name__)
-PORT = 5123
+PORT = int(os.environ.get("PORT", 5123))
+IN_DOCKER = os.environ.get("DOCKER") == "1"
 
 state: dict = {"filepath": None, "delta": {"ops": [{"insert": "\n"}]}}
 
@@ -461,18 +463,24 @@ async function saveDoc() {
 
 async function saveAs() {
   const cur = filepathEl.textContent;
-  const name = prompt('Filename (saved to Desktop):', cur !== 'Untitled' ? cur : 'document.docx');
+  const name = prompt('Filename:', cur !== 'Untitled' ? cur : 'document.docx');
   if (!name) return;
+  const fname = name.endsWith('.docx') ? name : name + '.docx';
   const delta = quill.getContents();
-  const d = await (await fetch('/saveas', {
+  const resp = await fetch('/saveas', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ delta: delta, name }),
-  })).json();
-  if (d.error) { setStatus('Save failed: ' + d.error); return; }
+    body: JSON.stringify({ delta: delta, name: fname }),
+  });
+  if (!resp.ok) { setStatus('Save failed'); return; }
+  const blob = await resp.blob();
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = fname; a.click();
+  URL.revokeObjectURL(url);
   setModified(false);
-  setFilepath(d.filepath);
-  setStatus('Saved: ' + d.filepath);
+  setFilepath(fname);
+  setStatus('Downloaded: ' + fname);
 }
 </script>
 </body>
@@ -535,20 +543,22 @@ def saveas():
     name = data.get("name", "document.docx")
     if not name.endswith(".docx"):
         name += ".docx"
-    dest = str(Path.home() / "Desktop" / name)
+    dest = str(Path("/tmp") / name)
     try:
         delta_to_docx(data["delta"]["ops"], dest)
         state["filepath"] = dest
         state["delta"] = data["delta"]
-        return jsonify({"filepath": dest})
+        return send_file(dest, as_attachment=True, download_name=name,
+                         mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     except Exception as exc:
-        return jsonify({"error": str(exc)})
+        return jsonify({"error": str(exc)}), 500
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     url = f"http://localhost:{PORT}"
-    threading.Timer(0.9, lambda: webbrowser.open(url)).start()
+    if not IN_DOCKER:
+        threading.Timer(0.9, lambda: webbrowser.open(url)).start()
     print(f"DOCX Rich Text Editor → {url}")
-    app.run(port=PORT, debug=False)
+    app.run(host="0.0.0.0", port=PORT, debug=False)
