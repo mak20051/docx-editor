@@ -1,32 +1,37 @@
 """
-DOCX Rich Text Editor — Flask + Quill.js
+Document Rich Text Editor — Flask + Quill.js
 http://localhost:5123
 
-Data flow:
-  open .docx ──▶ docx_to_delta() ──▶ Quill Delta JSON ──▶ editor
-  editor     ──▶ Quill Delta JSON ──▶ delta_to_docx()  ──▶ .docx
+Supported formats (read):  .docx .doc .odt .rtf .txt .html .htm
+Supported formats (write): .docx (always) or .txt (if opened as .txt)
 
-Formatting preserved: bold, italic, underline, strikethrough,
-  H1/H2/H3, bullet list, ordered list, blockquote, code block.
+Data flow:
+  file ──▶ file_to_delta() ──▶ Quill Delta JSON ──▶ editor
+  editor ──▶ Quill Delta JSON ──▶ delta_to_docx() ──▶ .docx download
 """
 
 import json
 import os
+import subprocess
 import threading
 import webbrowser
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template_string, request, send_file
 from docx import Document
-from docx.shared import Pt, RGBColor
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
+from docx.shared import Pt
 
 app = Flask(__name__)
 PORT = int(os.environ.get("PORT", 5123))
 IN_DOCKER = os.environ.get("DOCKER") == "1"
 
-state: dict = {"filepath": None, "delta": {"ops": [{"insert": "\n"}]}}
+SUPPORTED = {".docx", ".doc", ".odt", ".rtf", ".txt", ".html", ".htm"}
+
+state: dict = {
+    "filepath": None,
+    "orig_ext": ".docx",
+    "delta": {"ops": [{"insert": "\n"}]},
+}
 
 
 # ── DOCX → Quill Delta ────────────────────────────────────────────────────────
@@ -152,6 +157,65 @@ def delta_to_docx(ops: list, path: str):
         flush({})
 
     doc.save(path)
+
+
+# ── Multi-format reader ───────────────────────────────────────────────────────
+
+def _text_to_delta(text: str) -> dict:
+    ops = []
+    for line in text.splitlines():
+        if line:
+            ops.append({"insert": line})
+        ops.append({"insert": "\n"})
+    return {"ops": ops or [{"insert": "\n"}]}
+
+
+def file_to_delta(path: Path, ext: str) -> dict:
+    """Read any supported file and return a Quill Delta."""
+    ext = ext.lower()
+
+    if ext == ".docx":
+        return docx_to_delta(Document(path))
+
+    if ext == ".doc":
+        result = subprocess.run(
+            ["antiword", "-w", "0", str(path)],
+            capture_output=True, timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"antiword failed: {result.stderr.decode()}")
+        return _text_to_delta(result.stdout.decode("utf-8", errors="replace"))
+
+    if ext == ".odt":
+        from odf import text as odftext, teletype
+        from odf.opendocument import load as odf_load
+        doc = odf_load(str(path))
+        paras = [teletype.extractText(p) for p in doc.getElementsByType(odftext.P)]
+        return _text_to_delta("\n".join(paras))
+
+    if ext == ".rtf":
+        from striprtf.striprtf import rtf_to_text
+        raw = path.read_text(errors="replace")
+        return _text_to_delta(rtf_to_text(raw))
+
+    if ext == ".txt":
+        return _text_to_delta(path.read_text(errors="replace"))
+
+    if ext in (".html", ".htm"):
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(path.read_text(errors="replace"), "html.parser")
+        return _text_to_delta(soup.get_text("\n"))
+
+    raise ValueError(f"Unsupported format: {ext}")
+
+
+def delta_to_txt(ops: list) -> str:
+    """Flatten Delta to plain text for .txt export."""
+    out = []
+    for op in ops:
+        if isinstance(op.get("insert"), str):
+            out.append(op["insert"])
+    return "".join(out)
 
 
 # ── HTML ──────────────────────────────────────────────────────────────────────
@@ -371,7 +435,7 @@ HTML = r"""<!DOCTYPE html>
 </div>
 
 <div id="status">Ready</div>
-<input type="file" id="file-input" accept=".docx" onchange="openFile(this)">
+<input type="file" id="file-input" accept=".docx,.doc,.odt,.rtf,.txt,.html,.htm" onchange="openFile(this)">
 
 <script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
 <script>
@@ -386,6 +450,7 @@ const filepathEl = document.getElementById('filepath');
 const dot        = document.getElementById('modified-dot');
 const toggleBtn  = document.getElementById('theme-toggle');
 let modified = false;
+let origExt  = '.docx';
 
 // ── theme ─────────────────────────────────────────────────────────────────────
 const ICONS = { dark: '☀︎', light: '🌙' };
@@ -411,6 +476,7 @@ quill.on('text-change', () => setModified(true));
   const d = await (await fetch('/state')).json();
   quill.setContents(d.delta, 'silent');
   setFilepath(d.filepath);
+  origExt = d.orig_ext || '.docx';
   setModified(false);
 })();
 
@@ -434,8 +500,10 @@ async function openFile(input) {
   if (d.error) { setStatus('Error: ' + d.error); return; }
   quill.setContents(d.delta, 'silent');
   setFilepath(d.filepath);
+  origExt = d.ext || '.docx';
   setModified(false);
-  setStatus(`Opened: ${d.filepath}  (${d.paragraphs} paragraphs)`);
+  const saveNote = origExt === '.docx' ? '' : ' — saves as .docx';
+  setStatus(`Opened ${origExt.toUpperCase()}  (${d.paragraphs} paragraphs)${saveNote}`);
 }
 
 function newDoc() {
@@ -463,9 +531,12 @@ async function saveDoc() {
 
 async function saveAs() {
   const cur = filepathEl.textContent;
-  const name = prompt('Filename:', cur !== 'Untitled' ? cur : 'document.docx');
+  const defaultName = cur !== 'Untitled'
+    ? cur.replace(/\.(doc|odt|rtf|txt|html|htm)$/i, '.docx')
+    : 'document.docx';
+  const name = prompt('Filename (.docx or .txt):', defaultName);
   if (!name) return;
-  const fname = name.endsWith('.docx') ? name : name + '.docx';
+  const fname = (name.endsWith('.docx') || name.endsWith('.txt')) ? name : name + '.docx';
   const delta = quill.getContents();
   const resp = await fetch('/saveas', {
     method: 'POST',
@@ -497,7 +568,7 @@ def index():
 
 @app.route("/state")
 def get_state():
-    return jsonify({"filepath": state["filepath"], "delta": state["delta"]})
+    return jsonify({"filepath": state["filepath"], "orig_ext": state["orig_ext"], "delta": state["delta"]})
 
 
 @app.route("/open", methods=["POST"])
@@ -505,14 +576,18 @@ def open_docx():
     f = request.files.get("file")
     if not f:
         return jsonify({"error": "no file"})
+    ext = Path(f.filename).suffix.lower()
+    if ext not in SUPPORTED:
+        return jsonify({"error": f"Unsupported format: {ext}"})
     try:
         tmp = Path("/tmp") / f.filename
         f.save(tmp)
-        doc = Document(tmp)
-        delta = docx_to_delta(doc)
+        delta = file_to_delta(tmp, ext)
         state["filepath"] = str(tmp)
+        state["orig_ext"] = ext
         state["delta"] = delta
-        return jsonify({"delta": delta, "filepath": str(tmp), "paragraphs": len(doc.paragraphs)})
+        para_count = len([op for op in delta["ops"] if op.get("insert") == "\n"])
+        return jsonify({"delta": delta, "filepath": str(tmp), "paragraphs": para_count, "ext": ext})
     except Exception as exc:
         return jsonify({"error": str(exc)})
 
@@ -520,6 +595,7 @@ def open_docx():
 @app.route("/reset", methods=["POST"])
 def reset():
     state["filepath"] = None
+    state["orig_ext"] = ".docx"
     state["delta"] = {"ops": [{"insert": "\n"}]}
     return jsonify({"ok": True})
 
@@ -541,15 +617,24 @@ def save():
 def saveas():
     data = request.get_json()
     name = data.get("name", "document.docx")
-    if not name.endswith(".docx"):
-        name += ".docx"
-    dest = str(Path("/tmp") / name)
+    ops  = data["delta"]["ops"]
+
+    # honour .txt export; everything else → .docx
+    if name.endswith(".txt"):
+        dest = str(Path("/tmp") / name)
+        Path(dest).write_text(delta_to_txt(ops))
+        mime = "text/plain"
+    else:
+        if not name.endswith(".docx"):
+            name += ".docx"
+        dest = str(Path("/tmp") / name)
+        delta_to_docx(ops, dest)
+        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
     try:
-        delta_to_docx(data["delta"]["ops"], dest)
         state["filepath"] = dest
         state["delta"] = data["delta"]
-        return send_file(dest, as_attachment=True, download_name=name,
-                         mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        return send_file(dest, as_attachment=True, download_name=name, mimetype=mime)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
