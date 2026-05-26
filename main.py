@@ -178,12 +178,19 @@ def file_to_delta(path: Path, ext: str) -> dict:
         return docx_to_delta(Document(path))
 
     if ext == ".doc":
+        # Many .doc files are actually .docx with wrong extension — try that first
+        try:
+            return docx_to_delta(Document(path))
+        except Exception:
+            pass
+        # True binary .doc — use antiword
         result = subprocess.run(
             ["antiword", "-w", "0", str(path)],
             capture_output=True, timeout=30,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"antiword failed: {result.stderr.decode()}")
+            err = result.stderr.decode(errors="replace").strip()
+            raise RuntimeError(f"Could not open .doc file: {err or 'unsupported format'}")
         return _text_to_delta(result.stdout.decode("utf-8", errors="replace"))
 
     if ext == ".odt":
