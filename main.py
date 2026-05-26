@@ -161,94 +161,162 @@ HTML = r"""<!DOCTYPE html>
 <title>DOCX Editor</title>
 <link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
 <style>
+  /* ── theme tokens ── */
+  html[data-theme="dark"] {
+    --bg:        #1e1e2e;
+    --bg-bar:    #181825;
+    --bg-qbar:   #24273a;
+    --bg-sub:    #11111b;
+    --border:    #313244;
+    --fg:        #cdd6f4;
+    --fg-dim:    #6c7086;
+    --fg-muted:  #45475a;
+    --accent:    #89b4fa;
+    --accent-fg: #1e1e2e;
+    --quote-fg:  #a6adc8;
+    --code-bg:   #11111b;
+    --code-fg:   #a6e3a1;
+    --link:      #89dceb;
+    --dot:       #f38ba8;
+    --btn-bg:    #313244;
+    --toggle-lbl: "☀︎";
+  }
+  html[data-theme="light"] {
+    --bg:        #f8f8f2;
+    --bg-bar:    #ededf0;
+    --bg-qbar:   #e0e0e8;
+    --bg-sub:    #e4e4ed;
+    --border:    #c8c8d4;
+    --fg:        #1e1e2e;
+    --fg-dim:    #6c6c80;
+    --fg-muted:  #9090a0;
+    --accent:    #1d6fce;
+    --accent-fg: #ffffff;
+    --quote-fg:  #44445a;
+    --code-bg:   #e4e4ed;
+    --code-fg:   #276b27;
+    --link:      #0070c0;
+    --dot:       #d7222a;
+    --btn-bg:    #d4d4de;
+    --toggle-lbl: "🌙";
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; background: #1e1e2e; color: #cdd6f4; font-family: system-ui, sans-serif; }
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, sans-serif;
+    transition: background .2s, color .2s;
+  }
 
   /* ── file toolbar ── */
   #file-bar {
-    background: #181825;
+    background: var(--bg-bar);
     padding: 8px 14px;
     display: flex;
     align-items: center;
     gap: 6px;
-    border-bottom: 1px solid #313244;
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    transition: background .2s;
   }
   #file-bar button {
-    background: #313244; color: #cdd6f4;
+    background: var(--btn-bg); color: var(--fg);
     border: none; border-radius: 6px;
     padding: 6px 14px; font-size: 13px; cursor: pointer;
-    font-family: inherit; transition: background .15s;
+    font-family: inherit; transition: background .15s, color .15s;
     white-space: nowrap;
   }
-  #file-bar button:hover { background: #89b4fa; color: #1e1e2e; }
-  #filepath {
-    margin-left: 10px; color: #6c7086; font-size: 12px;
-    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  #file-bar button:hover { background: var(--accent); color: var(--accent-fg); }
+
+  /* theme toggle — right-aligned, icon-only */
+  #theme-toggle {
+    margin-left: auto;
+    background: var(--btn-bg); color: var(--fg);
+    border: none; border-radius: 6px;
+    padding: 6px 11px; font-size: 15px; cursor: pointer;
+    line-height: 1; transition: background .15s;
   }
-  #modified-dot { color: #f38ba8; font-size: 16px; display: none; }
+  #theme-toggle:hover { background: var(--accent); color: var(--accent-fg); }
+
+  #filepath {
+    margin-left: 10px; color: var(--fg-dim); font-size: 12px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 340px;
+  }
+  #modified-dot { color: var(--dot); font-size: 16px; display: none; }
 
   /* ── Quill overrides ── */
   #quill-wrapper {
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 82px); /* file-bar + status */
+    height: calc(100vh - 82px);
   }
 
   .ql-toolbar.ql-snow {
-    background: #24273a;
+    background: var(--bg-qbar);
     border: none;
-    border-bottom: 1px solid #313244;
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    transition: background .2s;
   }
-  .ql-toolbar .ql-stroke { stroke: #cdd6f4; }
-  .ql-toolbar .ql-fill   { fill:   #cdd6f4; }
-  .ql-toolbar .ql-picker-label { color: #cdd6f4; }
+  .ql-toolbar .ql-stroke { stroke: var(--fg); transition: stroke .15s; }
+  .ql-toolbar .ql-fill   { fill:   var(--fg); transition: fill .15s; }
+  .ql-toolbar .ql-picker-label { color: var(--fg); transition: color .15s; }
   .ql-toolbar button:hover .ql-stroke,
-  .ql-toolbar .ql-active .ql-stroke { stroke: #89b4fa; }
+  .ql-toolbar .ql-active .ql-stroke { stroke: var(--accent); }
   .ql-toolbar button:hover .ql-fill,
-  .ql-toolbar .ql-active .ql-fill   { fill:   #89b4fa; }
+  .ql-toolbar .ql-active .ql-fill   { fill:   var(--accent); }
   .ql-toolbar .ql-picker-label:hover,
-  .ql-toolbar .ql-active { color: #89b4fa; }
+  .ql-toolbar .ql-active { color: var(--accent); }
+  .ql-toolbar .ql-picker-options {
+    background: var(--bg-qbar);
+    border-color: var(--border);
+    color: var(--fg);
+  }
 
   .ql-container.ql-snow {
     border: none;
     flex: 1;
     overflow: hidden;
-    background: #1e1e2e;
+    background: var(--bg);
     font-size: 15px;
+    transition: background .2s;
   }
   .ql-editor {
-    color: #cdd6f4;
+    color: var(--fg);
     padding: 32px 80px;
     line-height: 1.75;
     height: 100%;
     overflow-y: auto;
+    transition: color .2s;
   }
-  .ql-editor.ql-blank::before { color: #45475a; font-style: normal; }
-  .ql-editor h1, .ql-editor h2, .ql-editor h3 { color: #89b4fa; }
+  .ql-editor.ql-blank::before { color: var(--fg-muted); font-style: normal; }
+  .ql-editor h1, .ql-editor h2, .ql-editor h3 { color: var(--accent); }
   .ql-editor blockquote {
-    border-left: 4px solid #89b4fa;
-    color: #a6adc8;
+    border-left: 4px solid var(--accent);
+    color: var(--quote-fg);
     padding-left: 16px;
     margin-left: 0;
   }
   .ql-editor pre.ql-syntax {
-    background: #11111b;
+    background: var(--code-bg);
     border-radius: 6px;
-    color: #a6e3a1;
+    color: var(--code-fg);
     font-size: 13px;
   }
-  .ql-editor a { color: #89dceb; }
+  .ql-editor a { color: var(--link); }
 
   /* ── status bar ── */
   #status {
-    background: #11111b;
+    background: var(--bg-sub);
     padding: 4px 16px;
-    font-size: 11px; color: #89b4fa;
-    border-top: 1px solid #313244;
+    font-size: 11px; color: var(--accent);
+    border-top: 1px solid var(--border);
     flex-shrink: 0;
     height: 24px;
+    transition: background .2s;
   }
 
   #file-input { display: none; }
@@ -263,6 +331,7 @@ HTML = r"""<!DOCTYPE html>
   <button onclick="saveAs()">Save As…</button>
   <span id="filepath">Untitled</span>
   <span id="modified-dot">●</span>
+  <button id="theme-toggle" onclick="toggleTheme()" title="Toggle day / night"></button>
 </div>
 
 <div id="quill-wrapper">
@@ -310,10 +379,23 @@ const quill = new Quill('#editor', {
   placeholder: 'Start typing or open a .docx file…',
 });
 
-const statusEl  = document.getElementById('status');
+const statusEl   = document.getElementById('status');
 const filepathEl = document.getElementById('filepath');
 const dot        = document.getElementById('modified-dot');
+const toggleBtn  = document.getElementById('theme-toggle');
 let modified = false;
+
+// ── theme ─────────────────────────────────────────────────────────────────────
+const ICONS = { dark: '☀︎', light: '🌙' };
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  toggleBtn.textContent = ICONS[theme];
+  localStorage.setItem('theme', theme);
+}
+function toggleTheme() {
+  applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+}
+applyTheme(localStorage.getItem('theme') || 'dark');
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function setStatus(msg)    { statusEl.textContent = msg; }
