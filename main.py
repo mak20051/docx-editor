@@ -36,55 +36,88 @@ state: dict = {
 
 # ── DOCX → Quill Delta ────────────────────────────────────────────────────────
 
-def docx_to_delta(doc: Document) -> dict:
-    """Convert python-docx Document to Quill Delta ops."""
+def _para_to_ops(para) -> list:
+    """Convert a single python-docx Paragraph to a list of Delta ops."""
     ops = []
-    for para in doc.paragraphs:
-        style = para.style.name if para.style else "Normal"
+    style = para.style.name if para.style else "Normal"
 
-        if not para.runs and not para.text:
-            ops.append({"insert": "\n"})
+    for run in para.runs:
+        if not run.text:
             continue
+        attrs: dict = {}
+        if run.bold is True:
+            attrs["bold"] = True
+        if run.italic is True:
+            attrs["italic"] = True
+        if run.underline is True:
+            attrs["underline"] = True
+        if run.font.strike is True:
+            attrs["strike"] = True
+        op: dict = {"insert": run.text}
+        if attrs:
+            op["attributes"] = attrs
+        ops.append(op)
 
-        for run in para.runs:
-            if not run.text:
-                continue
-            attrs: dict = {}
-            if run.bold is True:
-                attrs["bold"] = True
-            if run.italic is True:
-                attrs["italic"] = True
-            if run.underline is True:
-                attrs["underline"] = True
-            if run.font.strike is True:
-                attrs["strike"] = True
-            op: dict = {"insert": run.text}
-            if attrs:
-                op["attributes"] = attrs
-            ops.append(op)
+    line: dict = {}
+    lname = style.lower()
+    if "heading 1" in lname:
+        line["header"] = 1
+    elif "heading 2" in lname:
+        line["header"] = 2
+    elif "heading 3" in lname:
+        line["header"] = 3
+    elif lname in ("list bullet", "list bullet 2"):
+        line["list"] = "bullet"
+    elif lname in ("list number", "list number 2"):
+        line["list"] = "ordered"
+    elif lname == "block text":
+        line["blockquote"] = True
 
-        # paragraph terminator — carries line-level attributes
-        line: dict = {}
-        lname = style.lower()
-        if "heading 1" in lname:
-            line["header"] = 1
-        elif "heading 2" in lname:
-            line["header"] = 2
-        elif "heading 3" in lname:
-            line["header"] = 3
-        elif lname in ("list bullet", "list bullet 2"):
-            line["list"] = "bullet"
-        elif lname in ("list number", "list number 2"):
-            line["list"] = "ordered"
-        elif lname == "block text":
-            line["blockquote"] = True
+    nl: dict = {"insert": "\n"}
+    if line:
+        nl["attributes"] = line
+    ops.append(nl)
+    return ops
 
-        nl: dict = {"insert": "\n"}
-        if line:
-            nl["attributes"] = line
-        ops.append(nl)
 
-    return {"ops": ops}
+def docx_to_delta(doc: Document) -> dict:
+    """
+    Convert python-docx Document to Quill Delta ops.
+    Walks body in document order so table cells aren't skipped.
+
+    body children: w:p (paragraph) | w:tbl (table) | w:sectPr (ignore)
+    """
+    from docx.oxml.ns import qn as _qn
+    from docx.text.paragraph import Paragraph
+    from docx.table import Table
+
+    ops = []
+
+    def walk_body(element):
+        for child in element:
+            tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            if tag == "p":
+                para = Paragraph(child, doc)
+                if para.text or para.runs:
+                    ops.extend(_para_to_ops(para))
+                else:
+                    ops.append({"insert": "\n"})
+            elif tag == "tbl":
+                tbl = Table(child, doc)
+                for row in tbl.rows:
+                    row_texts = []
+                    for cell in row.cells:
+                        cell_text = " ".join(
+                            p.text for p in cell.paragraphs if p.text
+                        )
+                        row_texts.append(cell_text)
+                    line = " | ".join(row_texts)
+                    if line.strip():
+                        ops.append({"insert": line})
+                    ops.append({"insert": "\n"})
+
+    walk_body(doc.element.body)
+    return {"ops": ops or [{"insert": "\n"}]}
 
 
 # ── Quill Delta → DOCX ────────────────────────────────────────────────────────
@@ -589,13 +622,20 @@ def open_docx():
     try:
         tmp = Path("/tmp") / f.filename
         f.save(tmp)
+        print(f"[open] {f.filename} ({tmp.stat().st_size} bytes)", flush=True)
         delta = file_to_delta(tmp, ext)
+        op_count  = len(delta["ops"])
+        para_count = len([op for op in delta["ops"] if op.get("insert") == "\n"])
+        text_chars = sum(len(op["insert"]) for op in delta["ops"] if isinstance(op.get("insert"), str) and op["insert"] != "\n")
+        print(f"[open] delta: {op_count} ops, {para_count} paras, {text_chars} text chars", flush=True)
+        if text_chars == 0:
+            print(f"[open] WARNING: extracted 0 text chars from {f.filename}", flush=True)
         state["filepath"] = str(tmp)
         state["orig_ext"] = ext
         state["delta"] = delta
-        para_count = len([op for op in delta["ops"] if op.get("insert") == "\n"])
         return jsonify({"delta": delta, "filepath": str(tmp), "paragraphs": para_count, "ext": ext})
     except Exception as exc:
+        print(f"[open] ERROR: {exc}", flush=True)
         return jsonify({"error": str(exc)})
 
 
